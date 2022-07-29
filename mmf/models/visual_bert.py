@@ -20,7 +20,7 @@ from mmf.utils.transform import (
     transform_to_batch_sequence_dim,
 )
 from omegaconf import OmegaConf
-from torch import nn, Tensor
+from torch import Tensor, nn
 from transformers.modeling_bert import (
     BertConfig,
     BertForPreTraining,
@@ -157,7 +157,7 @@ class VisualBERTForPretraining(nn.Module):
         # If bert_model_name is not specified, you will need to specify
         # all of the required parameters for BERTConfig and a pretrained
         # model won't be loaded
-        self.bert_model_name = self.config.get("bert_model_name", None)
+        self.bert_model_name = getattr(self.config, "bert_model_name", None)
         self.bert_config = BertConfig.from_dict(
             OmegaConf.to_container(self.config, resolve=True)
         )
@@ -215,9 +215,9 @@ class VisualBERTForPretraining(nn.Module):
             self.tie_weights()
 
     def tie_weights(self):
-        """Make sure we are sharing the input and output embeddings.
-        Export to TorchScript can't handle parameter sharing so we are cloning them
-        instead.
+        """ Make sure we are sharing the input and output embeddings.
+            Export to TorchScript can't handle parameter sharing so we are cloning them
+            instead.
         """
         self.bert._tie_or_clone_weights(
             self.cls.predictions.decoder, self.bert.embeddings.word_embeddings
@@ -329,12 +329,6 @@ class VisualBERTForClassification(nn.Module):
 
             # Classifier needs to be initialized always as it is task specific
             self.classifier.apply(self.bert._init_weights)
-
-        # Set last hidden layer
-        if "losses" in self.config and self.config.zerobias:
-            for loss in self.config.losses:
-                if "bce" in loss["type"]:
-                    self.classifier[1].bias.data.fill_(self.config.biasfill)
 
     def forward(
         self,

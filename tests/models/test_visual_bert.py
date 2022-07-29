@@ -1,16 +1,14 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 
-import gc
 import unittest
 
 import tests.test_utils as test_utils
 import torch
 from mmf.common.sample import SampleList
-from mmf.modules.hf_layers import replace_with_jit, undo_replace_with_jit
+from mmf.modules.hf_layers import replace_with_jit
 from mmf.utils.build import build_model
 from mmf.utils.configuration import Configuration
-from mmf.utils.env import setup_imports, teardown_imports
-from mmf.utils.general import get_current_device
+from mmf.utils.env import setup_imports
 
 
 BERT_VOCAB_SIZE = 30255
@@ -30,12 +28,6 @@ class TestVisualBertTorchscript(unittest.TestCase):
         model_config["num_labels"] = 2
         model_config.model = model_name
         self.finetune_model = build_model(model_config)
-
-    def tearDown(self):
-        teardown_imports()
-        undo_replace_with_jit()
-        del self.finetune_model
-        gc.collect()
 
     def test_load_save_finetune_model(self):
         self.assertTrue(test_utils.verify_torchscript_models(self.finetune_model))
@@ -62,12 +54,6 @@ class TestVisualBertPretraining(unittest.TestCase):
         model_config.model = model_name
         self.pretrain_model = build_model(model_config)
 
-    def tearDown(self):
-        teardown_imports()
-        undo_replace_with_jit()
-        del self.pretrain_model
-        gc.collect()
-
     def test_pretrained_model(self):
         sample_list = SampleList()
 
@@ -83,8 +69,6 @@ class TestVisualBertPretraining(unittest.TestCase):
         )
 
         self.pretrain_model.eval()
-        self.pretrain_model = self.pretrain_model.to(get_current_device())
-        sample_list = sample_list.to(get_current_device())
 
         sample_list.dataset_name = "random"
         sample_list.dataset_type = "test"

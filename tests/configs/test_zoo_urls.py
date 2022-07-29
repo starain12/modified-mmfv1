@@ -4,9 +4,10 @@ import time
 import typing
 import unittest
 
+from mmf.common.typings import DictConfig, DownloadableFileType
 from mmf.utils.configuration import load_yaml
-from mmf.utils.download import check_header, DownloadableFile
-from omegaconf import DictConfig, OmegaConf
+from mmf.utils.download import DownloadableFile, check_header
+from omegaconf import OmegaConf
 from tests.test_utils import skip_if_macos, skip_if_no_network
 
 
@@ -15,10 +16,6 @@ class TestConfigsForKeys(unittest.TestCase):
         if OmegaConf.is_list(config) and len(config) > 0 and "url" in config[0]:
             # Found the urls, let's test them
             for item in config:
-                # flickr30 download source is down, ignore dataset until a
-                # mirror can be found
-                if getattr(item, "file_name", "") == "flickr30_images.tar.gz":
-                    continue
                 # First try making the DownloadableFile class to make sure
                 # everything is fine
                 download = DownloadableFile(**item)
@@ -36,7 +33,7 @@ class TestConfigsForKeys(unittest.TestCase):
             for item in config:
                 self._recurse_on_config(config[item], callback=callback)
 
-    def _check_download(self, download: DownloadableFile):
+    def _check_download(self, download: DownloadableFileType):
         # Check the actual header 3 times before failing
         for i in range(3):
             try:
@@ -49,7 +46,7 @@ class TestConfigsForKeys(unittest.TestCase):
                     # If failed, add a sleep of 5 seconds before retrying
                     time.sleep(2)
 
-    def _check_sha256sum(self, download: DownloadableFile):
+    def _check_sha256sum(self, download: DownloadableFileType):
         if download._hashcode is not None:
             matches = re.findall(r"^[A-Fa-f0-9]{64}$", download._hashcode)
             assert len(matches) == 1, f"{download._url} doesn't have a valid sha256sum"

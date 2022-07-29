@@ -33,6 +33,12 @@ class M4C(BaseModel):
     def config_path(cls):
         return "configs/models/m4c/defaults.yaml"
 
+    @classmethod
+    def format_state_key(cls, key):
+        key = key.replace("obj_faster_rcnn_fc7.module.lc", "obj_faster_rcnn_fc7.lc")
+        key = key.replace("ocr_faster_rcnn_fc7.module.lc", "ocr_faster_rcnn_fc7.lc")
+        return key
+
     def build(self):
         # modules requiring custom learning rates (usually for finetuning)
         self.finetune_modules = []
@@ -109,11 +115,15 @@ class M4C(BaseModel):
         self.obj_drop = nn.Dropout(self.config.obj.dropout_prob)
 
     def _build_ocr_encoding(self):
-        self.remove_ocr_fasttext = self.config.ocr.get("remove_ocr_fasttext", False)
-        self.remove_ocr_phoc = self.config.ocr.get("remove_ocr_phoc", False)
-        self.remove_ocr_frcn = self.config.ocr.get("remove_ocr_frcn", False)
-        self.remove_ocr_semantics = self.config.ocr.get("remove_ocr_semantics", False)
-        self.remove_ocr_bbox = self.config.ocr.get("remove_ocr_bbox", False)
+        self.remove_ocr_fasttext = getattr(
+            self.config.ocr, "remove_ocr_fasttext", False
+        )
+        self.remove_ocr_phoc = getattr(self.config.ocr, "remove_ocr_phoc", False)
+        self.remove_ocr_frcn = getattr(self.config.ocr, "remove_ocr_frcn", False)
+        self.remove_ocr_semantics = getattr(
+            self.config.ocr, "remove_ocr_semantics", False
+        )
+        self.remove_ocr_bbox = getattr(self.config.ocr, "remove_ocr_bbox", False)
 
         # OCR appearance feature: Faster R-CNN
         self.ocr_faster_rcnn_fc7 = build_image_encoder(

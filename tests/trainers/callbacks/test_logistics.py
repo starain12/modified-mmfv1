@@ -13,7 +13,6 @@ from mmf.common.registry import registry
 from mmf.common.report import Report
 from mmf.models.base_model import BaseModel
 from mmf.trainers.callbacks.logistics import LogisticsCallback
-from mmf.utils.configuration import load_yaml
 from mmf.utils.file_io import PathManager
 from mmf.utils.logger import setup_logger
 from omegaconf import OmegaConf
@@ -52,9 +51,7 @@ class TestLogisticsCallback(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         self.trainer = argparse.Namespace()
-        self.config = load_yaml(os.path.join("configs", "defaults.yaml"))
-        self.config = OmegaConf.merge(
-            self.config,
+        self.config = OmegaConf.create(
             {
                 "model": "simple",
                 "model_config": {},
@@ -67,20 +64,19 @@ class TestLogisticsCallback(unittest.TestCase):
                     "logger_level": "info",
                 },
                 "env": {"save_dir": self.tmpdir},
-            },
+            }
         )
         # Keep original copy for testing purposes
         self.trainer.config = deepcopy(self.config)
         registry.register("config", self.trainer.config)
+        setup_logger.cache_clear()
         setup_logger()
         self.report = Mock(spec=Report)
         self.report.dataset_name = "abcd"
         self.report.dataset_type = "test"
 
         self.trainer.model = SimpleModule()
-        self.trainer.val_loader = torch.utils.data.DataLoader(
-            NumbersDataset(), batch_size=self.config.training.batch_size
-        )
+        self.trainer.val_dataset = NumbersDataset()
 
         self.trainer.optimizer = torch.optim.Adam(
             self.trainer.model.parameters(), lr=1e-01

@@ -1,7 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 
 import argparse
-import os
 import unittest
 from copy import deepcopy
 
@@ -9,7 +8,6 @@ import torch
 from mmf.common.registry import registry
 from mmf.models.base_model import BaseModel
 from mmf.trainers.callbacks.lr_scheduler import LRSchedulerCallback
-from mmf.utils.configuration import load_yaml
 from omegaconf import OmegaConf
 
 
@@ -45,9 +43,7 @@ class NumbersDataset(torch.utils.data.Dataset):
 class TestLogisticsCallback(unittest.TestCase):
     def setUp(self):
         self.trainer = argparse.Namespace()
-        self.config = load_yaml(os.path.join("configs", "defaults.yaml"))
-        self.config = OmegaConf.merge(
-            self.config,
+        self.config = OmegaConf.create(
             {
                 "model": "simple",
                 "model_config": {},
@@ -57,16 +53,14 @@ class TestLogisticsCallback(unittest.TestCase):
                     "lr_steps": [1, 2],
                     "use_warmup": False,
                 },
-            },
+            }
         )
         # Keep original copy for testing purposes
         self.trainer.config = deepcopy(self.config)
         registry.register("config", self.trainer.config)
 
         self.trainer.model = SimpleModule()
-        self.trainer.val_loader = torch.utils.data.DataLoader(
-            NumbersDataset(), batch_size=self.config.training.batch_size
-        )
+        self.trainer.val_dataset = NumbersDataset()
 
         self.trainer.optimizer = torch.optim.Adam(
             self.trainer.model.parameters(), lr=1e-01

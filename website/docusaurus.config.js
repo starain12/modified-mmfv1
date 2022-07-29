@@ -7,8 +7,6 @@
  * @format
  */
 
-const {fbContent} = require('internaldocs-fb-helpers');
-
 module.exports = {
   title: 'MMF',
   tagline:
@@ -21,23 +19,22 @@ module.exports = {
   projectName: 'mmf',
   themeConfig: {
     image: 'img/logo.png',
+    // defaultDarkMode: false,
+    disableDarkMode: true,
     googleAnalytics: {
       trackingID: 'UA-135079836-3',
     },
     gtag: {
       trackingID: 'UA-135079836-3',
     },
-    colorMode: {
-      defaultMode: 'light',
-      disableSwitch: true,
-    },
+    sidebarCollapsible: false,
     navbar: {
       title: '',
       logo: {
         alt: 'MMF Logo',
         src: 'img/banner_logo.svg',
       },
-      items: [
+      links: [
         {
           to: 'docs',
           activeBasePath: 'docs',
@@ -102,29 +99,21 @@ module.exports = {
   },
   presets: [
     [
-      require.resolve('docusaurus-plugin-internaldocs-fb/docusaurus-preset'),
+      '@docusaurus/preset-classic',
       {
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
-          sidebarCollapsible: false,
-          showLastUpdateAuthor: fbContent({
-            internal: false,
-            external: true,
-          }),
-          showLastUpdateTime: fbContent({
-            internal: false,
-            external: true,
-          }),
-          editUrl: fbContent({
-            internal: 'https://www.internalfb.com/intern/diffusion/FBS/browse/master/fbcode/faim/mmf/website',
-            external: 'https://github.com/facebookresearch/mmf/edit/main/website/'
-          }),
+          homePageId: 'getting_started/installation',
+          showLastUpdateAuthor: true,
+          showLastUpdateTime: true,
+          editUrl:
+            'https://github.com/facebookresearch/mmf/edit/master/website/',
         },
         theme: {
           customCss: require.resolve('./src/css/custom.css'),
         },
-        enableEditor: true,
       },
     ],
   ],
+  plugins: [require.resolve('docusaurus-plugin-internaldocs-fb')],
 };

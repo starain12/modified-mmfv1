@@ -1,11 +1,11 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 import logging
-import warnings
 
 import omegaconf
 import torch
+from mmf.common import typings as mmf_typings
+from mmf.common.dataset_loader import DatasetLoader
 from mmf.common.registry import registry
-from mmf.datasets.multi_datamodule import MultiDataModule
 from mmf.modules.metrics import Metrics
 from mmf.trainers.base_trainer import BaseTrainer
 from mmf.trainers.callbacks.checkpoint import CheckpointCallback
@@ -16,11 +16,10 @@ from mmf.trainers.core.callback_hook import TrainerCallbackHookMixin
 from mmf.trainers.core.device import TrainerDeviceMixin
 from mmf.trainers.core.evaluation_loop import TrainerEvaluationLoopMixin
 from mmf.trainers.core.profiling import TrainerProfilingMixin
+from mmf.trainers.core.reporting import TrainerReportingMixin
 from mmf.trainers.core.training_loop import TrainerTrainingLoopMixin
 from mmf.utils.build import build_model, build_optimizer
 from mmf.utils.general import print_model_parameters
-from omegaconf import DictConfig, OmegaConf
-from packaging import version
 
 
 logger = logging.getLogger(__name__)
@@ -32,10 +31,11 @@ class MMFTrainer(
     TrainerTrainingLoopMixin,
     TrainerDeviceMixin,
     TrainerEvaluationLoopMixin,
+    TrainerReportingMixin,
     TrainerProfilingMixin,
     BaseTrainer,
 ):
-    def __init__(self, config: DictConfig):
+    def __init__(self, config: mmf_typings.DictConfig):
         super().__init__(config)
 
     def load(self):
@@ -57,9 +57,6 @@ class MMFTrainer(
         self.logistics_callback = LogisticsCallback(self.config, self)
         self.lr_scheduler_callback = LRSchedulerCallback(self.config, self)
 
-        # Reset callbacks as they are class variables and would be shared between
-        # multiple interactive shell calls to `run`
-        self.callbacks = []
         # Add callbacks for execution during events
         self.callbacks.append(self.lr_scheduler_callback)
         # checkpoint_callback needs to be called after lr_scheduler_callback so that
@@ -67,31 +64,23 @@ class MMFTrainer(
         # (otherwise the saved last_epoch in scheduler would be wrong)
         self.callbacks.append(self.checkpoint_callback)
         self.callbacks.append(self.logistics_callback)
-        # Add all customized callbacks defined by users
-        for callback in self.config.training.get("callbacks", []):
-            callback_type = callback.type
-            callback_param = callback.params
-            callback_cls = registry.get_callback_class(callback_type)
-            self.callbacks.append(callback_cls(self.config, self, **callback_param))
 
     def load_datasets(self):
         logger.info("Loading datasets")
-        self.dataset_loader = MultiDataModule(self.config)
+        self.dataset_loader = DatasetLoader(self.config)
+        self.dataset_loader.load_datasets()
 
-        self.train_loader = self.dataset_loader.train_dataloader()
-        self.val_loader = self.dataset_loader.val_dataloader()
-        self.test_loader = self.dataset_loader.test_dataloader()
+        self.train_dataset = self.dataset_loader.train_dataset
+        self.val_dataset = self.dataset_loader.val_dataset
+        self.test_dataset = self.dataset_loader.test_dataset
+
+        self.train_loader = self.dataset_loader.train_loader
+        self.val_loader = self.dataset_loader.val_loader
+        self.test_loader = self.dataset_loader.test_loader
 
     def load_model(self):
         logger.info("Loading model")
-        if self.config.model in self.config.model_config:
-            attributes = self.config.model_config[self.config.model]
-        else:
-            warnings.warn(
-                f"Model {self.config.model}'s config not present. "
-                + "Continuing with empty config"
-            )
-            attributes = OmegaConf.create()
+        attributes = self.config.model_config[self.config.model]
         # Easy way to point to config for other model
         if isinstance(attributes, str):
             attributes = self.config.model_config[attributes]
@@ -114,39 +103,27 @@ class MMFTrainer(
 
     def load_fp16_scaler(self):
         if self.training_config.fp16:
-            assert version.parse(torch.__version__) >= version.parse(
-                "1.6"
-            ), f"Using fp16 requires torch version >- 1.6, found: {torch.__version__}"
+            assert (
+                torch.__version__ >= "1.6"
+            ), "Using fp16 requires torch version >- 1.6"
             assert self.device != torch.device("cpu"), "fp16 cannot be used on cpu"
 
-        set_torch_grad_scaler = True
-        if self.training_config.fp16 and self.distributed:
-            try:
-                from fairscale.optim.grad_scaler import ShardedGradScaler
-                from fairscale.optim.oss import OSS
-
-                if isinstance(self.optimizer, OSS):
-                    self.scaler = ShardedGradScaler()
-                    set_torch_grad_scaler = False
-                    logger.info("Using FairScale ShardedGradScaler")
-            except ImportError:
-                logger.info("Using Pytorch AMP GradScaler")
-
-        if set_torch_grad_scaler:
-            self.scaler = torch.cuda.amp.GradScaler(enabled=self.training_config.fp16)
+        self.scaler = torch.cuda.amp.GradScaler(enabled=self.training_config.fp16)
 
     def train(self):
         logger.info("===== Model =====")
         logger.info(self.model)
         print_model_parameters(self.model)
 
-        if "train" in self.run_type:
-            self.on_train_start()
-            self.training_loop()
-            self.on_train_end()
+        if "train" not in self.run_type:
+            self.inference()
+            return
+
+        self.on_train_start()
+        self.training_loop()
+        self.on_train_end()
 
         self.inference()
-        self.finalize()
 
     def inference(self):
         dataset_type = []
@@ -163,9 +140,7 @@ class MMFTrainer(
             else:
                 self.on_test_start()
                 logger.info(f"Starting inference on {dataset} set")
-                report, meter = self.evaluation_loop(dataset, use_tqdm=True)
+                report, meter = self.evaluation_loop(
+                    getattr(self, f"{dataset}_loader"), use_tqdm=True
+                )
                 self.on_test_end(report=report, meter=meter)
-
-    def finalize(self):
-        self.dataset_loader.teardown()
-        self.teardown()

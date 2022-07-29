@@ -27,7 +27,8 @@ def multiple_replace(text, wordDict):
 
 
 def filter_answers(answers_dset, min_occurence):
-    """This will change the answer to preprocessed version"""
+    """This will change the answer to preprocessed version
+    """
     occurence = {}
     answer_list = []
     evalai_answer_processor = EvalAIAnswerProcessor()

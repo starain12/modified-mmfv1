@@ -5,14 +5,14 @@ import logging
 import os
 import warnings
 from ast import literal_eval
-from typing import List
 
+import demjson
 import torch
 from mmf.common.registry import registry
 from mmf.utils.env import import_user_module
 from mmf.utils.file_io import PathManager
 from mmf.utils.general import get_absolute_path, get_mmf_root
-from omegaconf import DictConfig, errors as OCErrors, OmegaConf
+from omegaconf import OmegaConf
 
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ def load_yaml(f):
     abs_f = get_absolute_path(f)
 
     try:
-        mapping = OmegaConf.load(PathManager.get_local_path(abs_f))
+        mapping = OmegaConf.load(abs_f)
         f = abs_f
     except FileNotFoundError as e:
         # Check if this file might be relative to root?
@@ -33,7 +33,7 @@ def load_yaml(f):
             raise e
         else:
             f = relative
-            mapping = OmegaConf.load(PathManager.get_local_path(f))
+            mapping = OmegaConf.load(f)
 
     if mapping is None:
         mapping = OmegaConf.create()
@@ -162,116 +162,6 @@ def get_mmf_env(key=None):
         return config.env
 
 
-def _merge_with_dotlist(
-    config: DictConfig,
-    opts: List[str],
-    skip_missing: bool = False,
-    log_info: bool = True,
-):
-    # TODO: To remove technical debt, a possible solution is to use
-    # struct mode to update with dotlist OmegaConf node. Look into this
-    # in next iteration
-    # TODO: Simplify this function
-    if opts is None:
-        opts = []
-
-    if len(opts) == 0:
-        return config
-
-    # Support equal e.g. model=visual_bert for better future hydra support
-    has_equal = opts[0].find("=") != -1
-    if has_equal:
-        opt_values = [opt.split("=", maxsplit=1) for opt in opts]
-        if not all(len(opt) == 2 for opt in opt_values):
-            for opt in opt_values:
-                assert len(opt) == 2, f"{opt} has no value"
-    else:
-        assert len(opts) % 2 == 0, "Number of opts should be multiple of 2"
-        opt_values = zip(opts[0::2], opts[1::2])
-
-    for opt, value in opt_values:
-        if opt == "dataset":
-            opt = "datasets"
-
-        splits = opt.split(".")
-        current = config
-        for idx, field in enumerate(splits):
-            array_index = -1
-            if field.find("[") != -1 and field.find("]") != -1:
-                stripped_field = field[: field.find("[")]
-                array_index = int(field[field.find("[") + 1 : field.find("]")])
-            else:
-                stripped_field = field
-            if stripped_field not in current:
-                if skip_missing is True:
-                    break
-                raise AttributeError(
-                    "While updating configuration"
-                    " option {} is missing from"
-                    " configuration at field {}".format(opt, stripped_field)
-                )
-            if isinstance(current[stripped_field], collections.abc.Mapping):
-                current = current[stripped_field]
-            elif (
-                isinstance(current[stripped_field], collections.abc.Sequence)
-                and array_index != -1
-            ):
-                try:
-                    current_value = current[stripped_field][array_index]
-                except OCErrors.ConfigIndexError:
-                    if skip_missing:
-                        break
-                    raise
-
-                # Case where array element to be updated is last element
-                if (
-                    not isinstance(
-                        current_value,
-                        (collections.abc.Mapping, collections.abc.Sequence),
-                    )
-                    or idx == len(splits) - 1
-                ):
-                    if log_info:
-                        logger.info(f"Overriding option {opt} to {value}")
-                    current[stripped_field][array_index] = _decode_value(value)
-                else:
-                    # Otherwise move on down the chain
-                    current = current_value
-            else:
-                if idx == len(splits) - 1:
-                    if log_info:
-                        logger.info(f"Overriding option {opt} to {value}")
-                    current[stripped_field] = _decode_value(value)
-                else:
-                    if skip_missing:
-                        break
-
-                    raise AttributeError(
-                        "While updating configuration",
-                        "option {} is not present "
-                        "after field {}".format(opt, stripped_field),
-                    )
-
-    return config
-
-
-def _decode_value(value):
-    # https://github.com/rbgirshick/yacs/blob/master/yacs/config.py#L400
-    if not isinstance(value, str):
-        return value
-
-    if value == "None":
-        value = None
-
-    try:
-        value = literal_eval(value)
-    except ValueError:
-        pass
-    except SyntaxError:
-        pass
-    return value
-
-
 def resolve_cache_dir(env_variable="MMF_CACHE_DIR", default="mmf"):
     # Some of this follow what "transformers" does for there cache resolving
     try:
@@ -324,15 +214,6 @@ class Configuration:
 
         self._default_config = self._build_default_config()
 
-        # Initially, silently add opts so that some of the overrides for the defaults
-        # from command line required for setup can be honored
-        self._default_config = _merge_with_dotlist(
-            self._default_config, args.opts, skip_missing=True, log_info=False
-        )
-        # Register the config and configuration for setup
-        registry.register("config", self._default_config)
-        registry.register("configuration", self)
-
         if default_only:
             other_configs = {}
         else:
@@ -340,7 +221,7 @@ class Configuration:
 
         self.config = OmegaConf.merge(self._default_config, other_configs)
 
-        self.config = _merge_with_dotlist(self.config, args.opts)
+        self.config = self._merge_with_dotlist(self.config, args.opts)
         self._update_specific(self.config)
         self.upgrade(self.config)
         # Resolve the config here itself after full creation so that spawned workers
@@ -348,8 +229,6 @@ class Configuration:
         self.config = OmegaConf.create(
             OmegaConf.to_container(self.config, resolve=True)
         )
-
-        # Update the registry with final config
         registry.register("config", self.config)
 
     def _build_default_config(self):
@@ -431,8 +310,8 @@ class Configuration:
         return load_yaml(default_model_config_path)
 
     def _build_dataset_config(self, config):
-        dataset = config.get("dataset", None)
-        datasets = config.get("datasets", None)
+        dataset = config.dataset
+        datasets = config.datasets
 
         if dataset is None and datasets is None:
             raise KeyError("Required argument 'dataset|datasets' not passed")
@@ -456,8 +335,8 @@ class Configuration:
 
             if default_dataset_config_path is None:
                 warning = (
-                    f"Dataset {dataset}'s builder class has no default configuration "
-                    + "provided"
+                    "Dataset {}'s builder class has no default configuration "
+                    + f"provided"
                 )
                 warnings.warn(warning)
                 continue
@@ -476,12 +355,6 @@ class Configuration:
         if demjson_string is None:
             return OmegaConf.create()
 
-        try:
-            import demjson
-        except ImportError:
-            logger.warning("demjson is required to use config_override")
-            raise
-
         demjson_dict = demjson.decode(demjson_string)
         return OmegaConf.create(demjson_dict)
 
@@ -493,9 +366,97 @@ class Configuration:
         OmegaConf.clear_resolvers()
         # Device count resolver
         device_count = max(1, torch.cuda.device_count())
-        OmegaConf.register_new_resolver("device_count", lambda: device_count)
-        OmegaConf.register_new_resolver("resolve_cache_dir", resolve_cache_dir)
-        OmegaConf.register_new_resolver("resolve_dir", resolve_dir)
+        OmegaConf.register_resolver("device_count", lambda: device_count)
+        OmegaConf.register_resolver("resolve_cache_dir", resolve_cache_dir)
+        OmegaConf.register_resolver("resolve_dir", resolve_dir)
+
+    def _merge_with_dotlist(self, config, opts):
+        # TODO: To remove technical debt, a possible solution is to use
+        # struct mode to update with dotlist OmegaConf node. Look into this
+        # in next iteration
+        if opts is None:
+            opts = []
+
+        if len(opts) == 0:
+            return config
+
+        # Support equal e.g. model=visual_bert for better future hydra support
+        has_equal = opts[0].find("=") != -1
+
+        if has_equal:
+            opt_values = [opt.split("=") for opt in opts]
+        else:
+            assert len(opts) % 2 == 0, "Number of opts should be multiple of 2"
+            opt_values = zip(opts[0::2], opts[1::2])
+
+        for opt, value in opt_values:
+            if opt == "dataset":
+                opt = "datasets"
+
+            splits = opt.split(".")
+            current = config
+            for idx, field in enumerate(splits):
+                array_index = -1
+                if field.find("[") != -1 and field.find("]") != -1:
+                    stripped_field = field[: field.find("[")]
+                    array_index = int(field[field.find("[") + 1 : field.find("]")])
+                else:
+                    stripped_field = field
+                if stripped_field not in current:
+                    raise AttributeError(
+                        "While updating configuration"
+                        " option {} is missing from"
+                        " configuration at field {}".format(opt, stripped_field)
+                    )
+                if isinstance(current[stripped_field], collections.abc.Mapping):
+                    current = current[stripped_field]
+                elif (
+                    isinstance(current[stripped_field], collections.abc.Sequence)
+                    and array_index != -1
+                ):
+                    current_value = current[stripped_field][array_index]
+
+                    # Case where array element to be updated is last element
+                    if (
+                        not isinstance(
+                            current_value,
+                            (collections.abc.Mapping, collections.abc.Sequence),
+                        )
+                        or idx == len(splits) - 1
+                    ):
+                        logger.info(f"Overriding option {opt} to {value}")
+                        current[stripped_field][array_index] = self._decode_value(value)
+                    else:
+                        # Otherwise move on down the chain
+                        current = current_value
+                else:
+                    if idx == len(splits) - 1:
+                        logger.info(f"Overriding option {opt} to {value}")
+                        current[stripped_field] = self._decode_value(value)
+                    else:
+                        raise AttributeError(
+                            "While updating configuration",
+                            "option {} is not present "
+                            "after field {}".format(opt, stripped_field),
+                        )
+
+        return config
+
+    def _decode_value(self, value):
+        # https://github.com/rbgirshick/yacs/blob/master/yacs/config.py#L400
+        if not isinstance(value, str):
+            return value
+
+        if value == "None":
+            value = None
+
+        try:
+            value = literal_eval(value)
+        except ValueError:
+            pass
+        except SyntaxError:
+            pass
+        return value
 
     def freeze(self):
         OmegaConf.set_struct(self.config, True)
@@ -565,18 +526,11 @@ class Configuration:
         # if args["seed"] == -1:
         #     self.config["training"]["seed"] = random.randint(1, 1000000)
 
-        if (
-            "learning_rate" in config
-            and "optimizer" in config
-            and "params" in config.optimizer
-        ):
-            lr = config.learning_rate
-            config.optimizer.params.lr = lr
+        if config.learning_rate:
+            if "optimizer" in config and "params" in config.optimizer:
+                lr = config.learning_rate
+                config.optimizer.params.lr = lr
 
-        # TODO: Correct the following issue
-        # This check is triggered before the config override from
-        # commandline is effective even after setting
-        # training.device = 'xla', it gets triggered.
         if not torch.cuda.is_available() and "cuda" in config.training.device:
             warnings.warn(
                 "Device specified is 'cuda' but cuda is not present. "

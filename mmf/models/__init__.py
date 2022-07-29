@@ -1,25 +1,21 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 # isort:skip_file
 
-from .albef.vit import AlbefVitEncoder
-from .ban import BAN
 from .base_model import BaseModel
-from .butd import BUTD
-from .cnn_lstm import CNNLSTM
-from .fusions import ConcatBERT, ConcatBoW, FusionBase, LateFusion
+from .pythia import Pythia
+from .ban import BAN
 from .lorra import LoRRA
+from .top_down_bottom_up import TopDownBottomUp
+from .butd import BUTD
+from .mmbt import MMBT, MMBTForClassification, MMBTForPreTraining
+from .cnn_lstm import CNNLSTM
 from .m4c import M4C
 from .m4c_captioner import M4CCaptioner
-from .mmbt import MMBT, MMBTForClassification, MMBTForPreTraining
-from .mmf_transformer import MMFTransformer
-from .pythia import Pythia
-from .top_down_bottom_up import TopDownBottomUp
-from .unimodal import UnimodalBase, UnimodalModal, UnimodalText
-from .uniter import UNITER
-from .vilbert import ViLBERT
-from .vilt import ViLT
-from .vinvl import VinVL
+from .fusions import FusionBase, ConcatBERT, ConcatBoW, LateFusion
+from .unimodal import UnimodalBase, UnimodalText, UnimodalModal
 from .visual_bert import VisualBERT
+from .vilbert import ViLBERT
+
 
 __all__ = [
     "TopDownBottomUp",
@@ -38,14 +34,9 @@ __all__ = [
     "M4C",
     "M4CCaptioner",
     "MMBT",
-    "MMFTransformer",
     "VisualBERT",
     "ViLBERT",
     "UnimodalBase",
     "UnimodalModal",
     "UnimodalText",
-    "AlbefVitEncoder",
-    "ViLT",
-    "UNITER",
-    "VinVL",
 ]

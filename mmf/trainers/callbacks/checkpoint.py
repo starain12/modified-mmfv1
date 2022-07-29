@@ -9,7 +9,8 @@ logger = logging.getLogger(__name__)
 
 
 class CheckpointCallback(Callback):
-    """Callback for executing different checkpoint requirements."""
+    """Callback for executing different checkpoint requirements.
+    """
 
     def __init__(self, config, trainer):
         """

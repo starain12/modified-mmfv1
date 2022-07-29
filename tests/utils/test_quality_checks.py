@@ -20,8 +20,8 @@ def walk_and_assert_init(folder):
 
 
 def walk_and_assert_not_empty(folder):
-    for root, subfolders, files in os.walk(folder):
-        assert len(files) > 0 or len(subfolders) > 0, f"Folder {root} is empty"
+    for _, subfolders, files in os.walk(folder):
+        assert len(files) > 0 or len(subfolders) > 0, f"Folder {folder} is empty"
 
 
 class TestQualityChecks(unittest.TestCase):

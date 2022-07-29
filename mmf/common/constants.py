@@ -26,14 +26,4 @@ VISUAL_DIALOG_CONSTS = {
     "vocabs": "https://dl.fbaipublicfiles.com/pythia/data/vocab.tar.gz",
 }
 
-CLIP_VOCAB_CONSTS = {
-    "url": "https://dl.fbaipublicfiles.com/mmf/clip/bpe_simple_vocab_16e6.txt.gz",
-    "file_name": "bpe_simple_vocab_16e6.txt.gz",
-    "hashcode": "924691ac288e54409236115652ad4aa250f48203de50a9e4722a6ecd48d6804a",
-}
-
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
-
-IMAGE_COLOR_MEAN = (0.485, 0.456, 0.406)
-IMAGE_COLOR_STD = (0.229, 0.224, 0.225)
-INCEPTION_IMAGE_NORMALIZE = (0.5, 0.5, 0.5)

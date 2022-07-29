@@ -6,19 +6,17 @@ import json
 import logging
 import os
 import sys
-import time
-from functools import wraps
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Dict, Union
 
-import torch
 from mmf.common.registry import registry
 from mmf.utils.configuration import get_mmf_env
-from mmf.utils.distributed import get_rank, is_main, is_xla
+from mmf.utils.distributed import get_rank, is_master
 from mmf.utils.file_io import PathManager
 from mmf.utils.timer import Timer
 from termcolor import colored
 
 
+@functools.lru_cache()
 def setup_output_folder(folder_only: bool = False):
     """Sets up and returns the output file where the logs will be placed
     based on the configuration passed. Usually "save_dir/logs/log_<timestamp>.txt".
@@ -54,6 +52,8 @@ def setup_output_folder(folder_only: bool = False):
     return log_filename
 
 
+# so that calling setup_logger multiple times won't add many handlers
+@functools.lru_cache()
 def setup_logger(
     output: str = None,
     color: bool = True,
@@ -99,16 +99,10 @@ def setup_logger(
     distributed_rank = get_rank()
     handlers = []
 
-    config = registry.get("config")
-    if config:
-        logging_level = config.get("training", {}).get("logger_level", "info").upper()
-    else:
-        logging_level = logging.INFO
-
     if distributed_rank == 0:
-        logger.setLevel(logging_level)
+        logger.setLevel(logging.INFO)
         ch = logging.StreamHandler(stream=sys.stdout)
-        ch.setLevel(logging_level)
+        ch.setLevel(logging.INFO)
         if color:
             formatter = ColorfulFormatter(
                 colored("%(asctime)s | %(name)s: ", "green") + "%(message)s",
@@ -135,7 +129,7 @@ def setup_logger(
         PathManager.mkdirs(os.path.dirname(filename))
 
         fh = logging.StreamHandler(_cached_log_stream(filename))
-        fh.setLevel(logging_level)
+        fh.setLevel(logging.INFO)
         fh.setFormatter(plain_formatter)
         logger.addHandler(fh)
         warnings_logger.addHandler(fh)
@@ -146,7 +140,7 @@ def setup_logger(
             save_dir = get_mmf_env(key="save_dir")
             filename = os.path.join(save_dir, "train.log")
             sh = logging.StreamHandler(_cached_log_stream(filename))
-            sh.setLevel(logging_level)
+            sh.setLevel(logging.INFO)
             sh.setFormatter(plain_formatter)
             logger.addHandler(sh)
             warnings_logger.addHandler(sh)
@@ -159,7 +153,7 @@ def setup_logger(
         for handler in logging.root.handlers[:]:
             logging.root.removeHandler(handler)
     # Now, add our handlers.
-    logging.basicConfig(level=logging_level, handlers=handlers)
+    logging.basicConfig(level=logging.INFO, handlers=handlers)
 
     registry.register("writer", logger)
 
@@ -210,71 +204,6 @@ def _find_caller():
         frame = frame.f_back
 
 
-def summarize_report(
-    current_iteration,
-    num_updates,
-    max_updates,
-    meter,
-    should_print=True,
-    extra=None,
-    tb_writer=None,
-    wandb_logger=None,
-):
-    if extra is None:
-        extra = {}
-    if not is_main() and not is_xla():
-        return
-
-    # Log the learning rate if available
-    if wandb_logger and "lr" in extra:
-        wandb_logger.log_metrics(
-            {"train/learning_rate": float(extra["lr"])}, commit=False
-        )
-
-    if tb_writer:
-        scalar_dict = meter.get_scalar_dict()
-        tb_writer.add_scalars(scalar_dict, current_iteration)
-
-    if wandb_logger:
-        metrics = meter.get_scalar_dict()
-        wandb_logger.log_metrics({**metrics, "trainer/global_step": current_iteration})
-
-    if not should_print:
-        return
-    log_dict = {}
-    if num_updates is not None and max_updates is not None:
-        log_dict.update({"progress": f"{num_updates}/{max_updates}"})
-
-    log_dict.update(meter.get_log_dict())
-    log_dict.update(extra)
-
-    log_progress(log_dict)
-
-
-def calculate_time_left(
-    max_updates,
-    num_updates,
-    timer,
-    num_snapshot_iterations,
-    log_interval,
-    eval_interval,
-):
-    if num_updates is None or max_updates is None:
-        return "Unknown"
-
-    time_taken_for_log = time.time() * 1000 - timer.start
-    iterations_left = max_updates - num_updates
-    num_logs_left = iterations_left / log_interval
-    time_left = num_logs_left * time_taken_for_log
-
-    snapshot_iteration = num_snapshot_iterations / log_interval
-    if eval_interval:
-        snapshot_iteration *= iterations_left / eval_interval
-    time_left += snapshot_iteration * time_taken_for_log
-
-    return timer.get_time_hhmmss(gap=time_left)
-
-
 def log_progress(info: Union[Dict, Any], log_format="simple"):
     """Useful for logging progress dict.
 
@@ -306,32 +235,6 @@ def log_progress(info: Union[Dict, Any], log_format="simple"):
     logger.info(output)
 
 
-def log_class_usage(component_type, klass):
-    """This function is used to log the usage of different MMF components."""
-    identifier = "MMF"
-    if klass and hasattr(klass, "__name__"):
-        identifier += f".{component_type}.{klass.__name__}"
-    torch._C._log_api_usage_once(identifier)
-
-
-def skip_if_tensorboard_inactive(fn: Callable) -> Callable:
-    """
-    Checks whether summary writer is initialized and rank is 0 (main)
-    Args:
-        fn (Callable): Function which should be called based on whether
-            tensorboard should log or not
-    """
-
-    @wraps(fn)
-    def wrapped_fn(self, *args: Any, **kwargs: Any) -> Optional[Any]:
-        if self.summary_writer is None or not self._is_main:
-            return None
-        else:
-            return fn(self, *args, **kwargs)
-
-    return wrapped_fn
-
-
 # ColorfulFormatter is adopted from Detectron2 and adapted for MMF
 class ColorfulFormatter(logging.Formatter):
     def __init__(self, *args, **kwargs):
@@ -350,144 +253,49 @@ class ColorfulFormatter(logging.Formatter):
 
 class TensorboardLogger:
     def __init__(self, log_folder="./logs", iteration=0):
-        self._summary_writer = None
-        self._is_main = is_main()
+        # This would handle warning of missing tensorboard
+        from torch.utils.tensorboard import SummaryWriter
+
+        self.summary_writer = None
+        self._is_master = is_master()
         self.timer = Timer()
         self.log_folder = log_folder
         self.time_format = "%Y-%m-%dT%H:%M:%S"
-        current_time = self.timer.get_time_hhmmss(None, format=self.time_format)
-        self.tensorboard_folder = os.path.join(
-            self.log_folder, f"tensorboard_{current_time}"
-        )
 
-    @property
-    def summary_writer(self):
-        # Only on rank zero
-        if not self._is_main:
-            return None
-
-        if self._summary_writer is None:
-            # This would handle warning of missing tensorboard
-            from torch.utils.tensorboard import SummaryWriter
-
-            self._summary_writer = SummaryWriter(self.tensorboard_folder)
-
-        return self._summary_writer
-
-    @skip_if_tensorboard_inactive
-    def close(self):
-        """
-        Closes the tensorboard summary writer.
-        """
-        self.summary_writer.close()
-
-    @skip_if_tensorboard_inactive
-    def add_scalar(self, key, value, iteration):
-        self.summary_writer.add_scalar(key, value, iteration)
-
-    @skip_if_tensorboard_inactive
-    def add_scalars(self, scalar_dict, iteration):
-        for key, val in scalar_dict.items():
-            self.summary_writer.add_scalar(key, val, iteration)
-
-    @skip_if_tensorboard_inactive
-    def add_histogram_for_model(self, model, iteration):
-        for name, param in model.named_parameters():
-            np_param = param.clone().cpu().data.numpy()
-            self.summary_writer.add_histogram(name, np_param, iteration)
-
-
-class WandbLogger:
-    r"""
-    Log using `Weights and Biases`.
-
-    Args:
-        entity: An entity is a username or team name where you're sending runs.
-        config: Configuration for the run.
-        project: Name of the W&B project.
-
-    Raises:
-        ImportError: If wandb package is not installed.
-    """
-
-    def __init__(
-        self,
-        entity: Optional[str] = None,
-        config: Optional[Dict] = None,
-        project: Optional[str] = None,
-    ):
-        try:
-            import wandb
-        except ImportError:
-            raise ImportError(
-                "To use the Weights and Biases Logger please install wandb."
-                "Run `pip install wandb` to install it."
+        if self._is_master:
+            current_time = self.timer.get_time_hhmmss(None, format=self.time_format)
+            tensorboard_folder = os.path.join(
+                self.log_folder, f"tensorboard_{current_time}"
             )
-
-        self._wandb = wandb
-        self._wandb_init = dict(entity=entity, config=config, project=project)
-        wandb_kwargs = dict(config.training.wandb)
-        wandb_kwargs.pop("enabled")
-        wandb_kwargs.pop("entity")
-        wandb_kwargs.pop("project")
-        wandb_kwargs.pop("log_checkpoint")
-        self._wandb_init.update(**wandb_kwargs)
-
-        self.setup()
-
-    def setup(self):
-        """
-        Setup `Weights and Biases` for logging.
-        """
-        if is_main():
-
-            if self._wandb.run is None:
-                self._wandb.init(**self._wandb_init)
-
-            # define default x-axis (for latest wandb versions)
-            if getattr(self._wandb, "define_metric", None):
-                self._wandb.define_metric("trainer/global_step")
-                self._wandb.define_metric(
-                    "*", step_metric="trainer/global_step", step_sync=True
-                )
+            self.summary_writer = SummaryWriter(tensorboard_folder)
 
     def __del__(self):
-        if getattr(self, "_wandb", None) is not None:
-            self._wandb.finish()
+        if getattr(self, "summary_writer", None) is not None:
+            self.summary_writer.close()
 
-    def _should_log_wandb(self):
-        if self._wandb is None or not is_main():
+    def _should_log_tensorboard(self):
+        if self.summary_writer is None or not self._is_master:
             return False
         else:
             return True
 
-    def log_metrics(self, metrics: Dict[str, float], commit=True):
-        """
-        Log the monitored metrics to the wand dashboard.
-
-        Args:
-            metrics (Dict[str, float]): A dictionary of metrics to log.
-            commit (bool): Save the metrics dict to the wandb server and
-                           increment the step. (default: True)
-        """
-        if not self._should_log_wandb():
+    def add_scalar(self, key, value, iteration):
+        if not self._should_log_tensorboard():
             return
 
-        self._wandb.log(metrics, commit=commit)
+        self.summary_writer.add_scalar(key, value, iteration)
 
-    def log_model_checkpoint(self, model_path):
-        """
-        Log the model checkpoint to the wandb dashboard.
-
-        Args:
-            model_path (str): Path to the model file.
-        """
-        if not self._should_log_wandb():
+    def add_scalars(self, scalar_dict, iteration):
+        if not self._should_log_tensorboard():
             return
 
-        model_artifact = self._wandb.Artifact(
-            "run_" + self._wandb.run.id + "_model", type="model"
-        )
+        for key, val in scalar_dict.items():
+            self.summary_writer.add_scalar(key, val, iteration)
 
-        model_artifact.add_file(model_path, name="current.pt")
-        self._wandb.log_artifact(model_artifact, aliases=["latest"])
+    def add_histogram_for_model(self, model, iteration):
+        if not self._should_log_tensorboard():
+            return
+
+        for name, param in model.named_parameters():
+            np_param = param.clone().cpu().data.numpy()
+            self.summary_writer.add_histogram(name, np_param, iteration)

@@ -4,8 +4,6 @@ config_version: 1.0
 # Configuration for training
 training:
     # Name of the trainer class used to define the training/evalution loop
-    # `mmf` for default trainer, `lightning` for pytorch lightning trainer
-    # pytorch lightning trainer's params is at `trainer.params`
     trainer: mmf
     # Seed to be used for training. -1 means random seed between 1 and 100000.
     # Either pass fixed through your config or command line arguments
@@ -22,7 +20,7 @@ training:
     # completed first. Default: null means epochs won't be used
     max_epochs: null
 
-    # After `log_interval` updates, current update's training loss will be
+    # After `log_interval` iterations, current iteration's training loss will be
     # reported. This will also report validation on a single batch from validation set
     # to provide an estimate on validation side
     log_interval: 100
@@ -41,39 +39,9 @@ training:
     # Tensorboard control, by default tensorboard is disabled
     tensorboard: false
 
-    # Enable torch.backends.cudnn.benchmark, by default it is disabled
-    cudnn_benchmark: false
-
-    # Weights and Biases control, by default Weights and Biases (wandb) is disabled
-    wandb:
-        # Whether to use Weights and Biases Logger, (Default: false)
-        enabled: false
-        # An entity is a username or team name where you're sending runs.
-        # This is necessary if you want to log your metrics to a team account. By default
-        # it will log the run to your user account.
-        entity: null
-        # Project name to be used while logging the experiment with wandb
-        project: mmf
-        # Experiment/ run name to be used while logging the experiment
-        # under the project with wandb
-        name: ${training.experiment_name}
-        # You can save your model checkpoints as W&B Artifacts for model versioning.
-        # Set the value to `true` to enable this feature.
-        log_checkpoint: false
-        # Specify other argument values that you want to pass to wandb.init(). Check out the documentation
-        # at https://docs.wandb.ai/ref/python/init to see what arguments are available.
-        # job_type: 'train'
-        # tags: ['tag1', 'tag2']
-
-
-
-    # Size of the batch globally. If distributed or data_parallel
+    # Size of each batch. If distributed or data_parallel
     # is used, this will be divided equally among GPUs
     batch_size: 512
-    # Size of the batch per GPU. Use this if you want to specify batch size
-    # per GPU instead of global batch size.
-    # Mutually exclusive with training.batch_size.
-    batch_size_per_device: null
     # Run update_frequency=K batches with batch_size=N, accumulate gradients, then do
     # one update (one optimizer step). The effect is a large effective batch size of
     # KxN (without incurring the memory overhead of setting batch_size to KxN).
@@ -87,15 +55,12 @@ training:
     dataset_size_proportional_sampling: true
     # Whether to pin memory in dataloader
     pin_memory: false
-    # Whether to use persistent workers in dataloader
-    # (only effective for PyTorch 1.8 or higher which supports persistent_workers)
-    persistent_workers: true
 
-    # After `checkpoint_interval` number of updates, MMF will make a snapshot
+    # After `checkpoint_interval` iterations, MMF will make a snapshot
     # which will involve creating a checkpoint for current training scenarios
     checkpoint_interval: 1000
     # This will evaluate evaluation metrics on whole validation set after
-    # evaluation interval number of updates
+    # evaluation interval
     evaluation_interval: 1000
     # Whether gradients should be clipped
     clip_gradients: false
@@ -152,7 +117,7 @@ training:
     find_unused_parameters: false
 
     # By default metrics evaluation is turned off during training. Set this to true
-    # to enable evaluation every log_interval number of updates
+    # to enable evaluation every log_interval
     evaluate_metrics: false
 
     # This will enable anomaly detection mode in PyTorch. Use this for debugging
@@ -166,74 +131,14 @@ training:
     # drop in results.
     fp16: false
 
-    # Users can define their own callback functions in the trainer, e.g. adjust
-    # learning rate, plot data in tensorboard, etc.
-    # The format should look like:
-    # callbacks:
-    #   - type: my_callback
-    #     params:
-    #       foo: bar
-    callbacks: []
-
-    # check for NaNs in losses during training
-    # Set to true to look for NaNs in the losses and exit the training when NaN happens
-    exit_on_nan_losses: true
-
-trainer:
-    # Name of the trainer class used to define the training/evalution loop
-    # `mmf` or `lightning` to specify the trainer to be used
-    # `mmf` for mmf trainer,
-    # for mmf trainer params, please see training params in the `training` config
-    # `lightning` for Pytorch Lightning trainer
-    # for lightning trainer params, please see lightning doc for details: ie.,
-    # https://pytorch-lightning.readthedocs.io/en/latest/trainer.html#trainer-class-api
-    type: lightning
-    params:
-        gpus: 1
-        num_nodes: 1
-        precision: 32
-        deterministic: false
-        benchmark: false
-        max_steps: 22000
-        max_epochs: null
-        gradient_clip_val: 0.0
-        num_sanity_val_steps: 0
-        enable_checkpointing: true
-        accumulate_grad_batches: 1
-        val_check_interval: 1000
-        log_every_n_steps: 100
-        logger: false
-        limit_val_batches: 1.0
-        # progress bar is turned off if want same logging format as `mmf_trainer`
-        enable_progress_bar: False
-        # `config.trainer.params.resume_from_checkpoint` always takes precedence over
-        # `config.checkpoint` such as `config.checkpoint.resume_file`,
-        # `config.checkpoint.resume_zoo` and `config.checkpoint.resume`.
-        # `resume_from_checkpoint` is used to specify trainer resume parameters,
-        # including resuming model state.
-        # If `resume_from_checkpoint` is not specified, then we default to using
-        # "current.ckpt" if `config.checkpoint.resume is True`, or "best.ckpt" if
-        # `config.checkpoint.resume_best is True`. Else, we read it from
-        # `config.checkpoint.resume_file` or `config.checkpoint.resume_zoo`
-        # (in that order). If `resume_from_checkpoint` is not specified, and if
-        # `config.checkpoint` is not specified, then no checkpoint file will be loaded.
-        resume_from_checkpoint: null
-
 # Configuration for evaluation
 evaluation:
     # Metrics for evaluation
     metrics: []
-    # Use CPU for metrics and other calculations, you can use this option if
-    # you see OOM in validation as in metrics are calculated globally
-    use_cpu: false
     # Generate predictions in a file
     predict: false
     # Prediction file format (csv|json), default is json
     predict_file_format: json
-    # Test reporter params. Defaults to type: file
-    reporter:
-        type: file
-        params: {}
 
 # Configuration for models, default configuration files for various models
 # included in MMF can be found under configs directory in root folder
@@ -284,8 +189,8 @@ env:
 
     # Config path for dataset zoo, can be overridden via environment
     # variable MMF_DATASET_ZOO as well.
-    dataset_zoo: ${oc.env:MMF_DATASET_ZOO,configs/zoo/datasets.yaml}
-    model_zoo: ${oc.env:MMF_MODEL_ZOO, configs/zoo/models.yaml}
+    dataset_zoo: ${env:MMF_DATASET_ZOO,configs/zoo/datasets.yaml}
+    model_zoo: ${env:MMF_MODEL_ZOO, configs/zoo/models.yaml}
 
     # Similar to cache dir, but can be used if specifically want to override
     # where MMF stores your data. Default would be cache_dir/data.
@@ -294,32 +199,27 @@ env:
 
     # Directory for saving checkpoints and other metadata
     # Use MMF_SAVE_DIR or env.save_dir to override
-    save_dir: ${oc.env:MMF_SAVE_DIR, ./save}
+    save_dir: ${env:MMF_SAVE_DIR, ./save}
 
     # Directory for saving logs, default is "logs" inside the save folder
     # If log_dir is specifically passed, logs will be written inside that folder
     # Use MMF_LOG_DIR or env.log_dir to override
-    log_dir: ${oc.env:MMF_LOG_DIR,}
+    log_dir: ${env:MMF_LOG_DIR,}
 
     # Directory for saving reports, if not passed a opts based folder will be generated
     # inside save_dir/reports and reports will be saved there
     # Use MMF_REPORT_DIR or env.report_dir to override
-    report_dir: ${oc.env:MMF_REPORT_DIR,}
+    report_dir: ${env:MMF_REPORT_DIR,}
 
     # Log directory for tensorboard, default points to same as logs
     # Only used when training.tensorboard is enabled.
     # Use MMF_TENSORBOARD_LOGDIR or env.tensorboard_logdir to override
-    tensorboard_logdir: ${oc.env:MMF_TENSORBOARD_LOGDIR,}
-
-    # Log directory for Weights and Biases, default points to same as logs
-    # Only used when training.wandb is enabled.
-    # Use MMF_WANDB_LOGDIR or env.wandb_logdir to override
-    wandb_logdir: ${oc.env:MMF_WANDB_LOGDIR,}
+    tensorboard_logdir: ${env:MMF_TENSORBOARD_LOGDIR,}
 
     # User directory where user can keep their own models independent of MMF
     # This allows users to create projects which only include MMF as dependency
     # Use MMF_USER_DIR or env.user_dir to specify
-    user_dir: ${oc.env:MMF_USER_DIR,}
+    user_dir: ${env:MMF_USER_DIR,}
 
 ###
 # Configuration for the distributed setup
@@ -394,9 +294,3 @@ checkpoint:
         counts: false
         # If fp16 scaler should be reset or not
         fp16_scaler: false
-
-
-multitasking:
-    enabled: true
-    type: size_proportional
-    params: {}

@@ -2,21 +2,7 @@
 id: installation
 title: Installation
 sidebar_label: Installation
-slug: /
 ---
-import {FbInternalOnly} from 'internaldocs-fb-helpers';
-
-<FbInternalOnly>
-
-Internal Only
-
-:::tip
-
-FB users can head over to the [FB section](fb/devserver.md) to understand how to use MMF internally in FBCode.
-
-:::
-
-</FbInternalOnly>
 
 MMF has been tested on Python 3.7+ and PyTorch 1.6. We recommend using a conda environment to install MMF.
 
@@ -37,13 +23,6 @@ To install from source do:
 git clone https://github.com/facebookresearch/mmf.git
 cd mmf
 pip install --editable .
-```
-
-In case you met permission issues when running the command, try to install to user folder and
-[disable build isolation](https://pip.pypa.io/en/stable/reference/pip/#pep-517-and-518-support).
-
-```bash
-pip install --editable . --user --no-build-isolation
 ```
 
 ## Install using pip
@@ -84,4 +63,4 @@ pytest ./tests/
 
 ## Contributing to MMF
 
-We welcome all contributions to MMF. Have a look at our [contributing guidelines](https://github.com/facebookresearch/mmf/tree/main/.github/CONTRIBUTING.md) to get started.
+We welcome all contributions to MMF. Have a look at our [contributing guidelines](https://github.com/facebookresearch/mmf/tree/master/.github/CONTRIBUTING.md) to get started.

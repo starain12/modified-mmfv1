@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import omegaconf
 import torch
 from mmf.common.registry import registry
+from mmf.common.typings import DictConfig
 from mmf.models.base_model import BaseModel
 from mmf.modules.embeddings import (
     PreExtractedEmbedding,
@@ -15,7 +16,6 @@ from mmf.modules.embeddings import (
 from mmf.modules.layers import BranchCombineLayer, ClassifierLayer
 from mmf.utils.build import build_image_encoder
 from mmf.utils.general import filter_grads
-from omegaconf import DictConfig
 
 
 @registry.register_model("movie_mcan")
@@ -24,13 +24,18 @@ class MoVieMcan(BaseModel):
         super().__init__(config)
         self.config = config
         self._global_config = registry.get("config")
-        self._datasets = self._global_config.datasets
-        if isinstance(self._datasets, str):
-            self._datasets = self._datasets.split(",")
+        self._datasets = self._global_config.datasets.split(",")
 
     @classmethod
     def config_path(cls):
         return "configs/models/movie_mcan/defaults.yaml"
+
+    @classmethod
+    def format_state_key(cls, key):
+        key = key.replace(
+            "image_feature_encoders.0.module.lc", "image_feature_encoders.0.lc"
+        )
+        return key
 
     def build(self):
         self.image_feature_dim = 2048
@@ -75,7 +80,7 @@ class MoVieMcan(BaseModel):
         with omegaconf.open_dict(feat_encoder_config):
             feat_encoder_config.params.model_data_dir = self.config.model_data_dir
             feat_encoder_config.params.in_dim = feature_dim
-        feat_model = build_image_encoder(feat_encoder_config, direct_features=False)
+        feat_model = build_image_encoder(feat_encoder_config, direct_features=True)
 
         setattr(self, attr + "_feature_dim", feat_model.out_dim)
         setattr(self, attr + "_feature_encoders", feat_model)
@@ -130,7 +135,7 @@ class MoVieMcan(BaseModel):
             self.config.classifier.type,
             in_dim=combined_embedding_dim,
             out_dim=num_choices,
-            **params,
+            **params
         )
 
     def _init_extras(self):
@@ -221,13 +226,7 @@ class MoVieMcan(BaseModel):
             feature = sample_list.image
 
             feature_encoder = getattr(self, attr + "_feature_encoders")
-            encoded_feature = feature_encoder(feature)
-            b, c, h, w = encoded_feature.shape
-            padded_feat = torch.zeros(
-                (b, c, 32, 32), dtype=torch.float, device=encoded_feature.device
-            )
-            padded_feat[:, :, :h, :w] = encoded_feature
-            encoded_feature = padded_feat
+            encoded_feature = feature_encoder(feature, text_embedding_vec)
         else:
             feature = sample_list.image_feature_0
 

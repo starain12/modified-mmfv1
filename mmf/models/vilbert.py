@@ -14,7 +14,7 @@ from mmf.modules.hf_layers import replace_with_jit
 from mmf.utils.configuration import get_mmf_cache_dir
 from mmf.utils.modeling import get_optimizer_parameters_for_bert
 from omegaconf import OmegaConf
-from torch import nn, Tensor
+from torch import Tensor, nn
 from torch.nn import CrossEntropyLoss
 from transformers.modeling_bert import (
     ACT2FN,
@@ -1351,7 +1351,7 @@ class ViLBERT(BaseModel):
         else:
             self.model = ViLBERTForClassification(self.config)
 
-        if self.config.get("freeze_base", False):
+        if getattr(self.config, "freeze_base", False):
             for p in self.model.bert.parameters():
                 p.requires_grad = False
 

@@ -1,7 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 import numpy as np
 import torch
-from mmf.utils.distributed import is_main, is_xla
+from mmf.utils.distributed import is_master
 
 
 class EarlyStopping:
@@ -46,10 +46,7 @@ class EarlyStopping:
         Returns:
             bool -- Tells whether early stopping occurred or not
         """
-        # There are operations involving synchronization downstream
-        # For XLA those calls must be executed from all cores
-        # Therefore we do return here in case of XLA
-        if not is_main() and not is_xla():
+        if not is_master():
             return False
 
         value = meter.meters.get(self.early_stop_criteria, None)

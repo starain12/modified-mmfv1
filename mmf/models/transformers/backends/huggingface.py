@@ -5,10 +5,13 @@ from typing import Any, Dict, List, Type
 
 import torch
 from mmf.common.registry import registry
-from mmf.models.transformers.base import BaseTransformer, BaseTransformerBackend
-from mmf.modules.hf_layers import BertModelJit, replace_with_jit
+from mmf.models.transformers.base import (
+    BaseTransformerBackend,
+    BaseTransformerConfigType,
+)
+from mmf.modules.hf_layers import replace_with_jit
 from omegaconf import OmegaConf
-from torch import nn, Tensor
+from torch import Tensor, nn
 from transformers import AutoConfig, AutoModel
 
 
@@ -22,7 +25,7 @@ class HuggingfaceEmbeddings(nn.Module):
 
     def __init__(
         self,
-        model_config: BaseTransformer.Config,
+        model_config: BaseTransformerConfigType,
         transformer_config: Dict[str, Any],
         transformer: Type[nn.Module],
         *args,
@@ -63,7 +66,7 @@ class HuggingfaceEmbeddings(nn.Module):
             hidden_dropout_prob = modality.get(
                 "hidden_dropout_prob", self.transformer_config.hidden_dropout_prob
             )
-            if modality.type == "text" and modality.get("consume_raw", True):
+            if modality.type == "text":
                 self.token_embeddings.append(
                     nn.Embedding(
                         self.transformer_config.vocab_size,
@@ -142,7 +145,6 @@ class HuggingfaceEmbeddings(nn.Module):
         ):
             modality_name = self.modality_keys[idx]
             total_embedding = token_emb(tokens_ids[modality_name])
-
             if modality_name in position_ids:
                 total_embedding += pos_emb(position_ids[modality_name])
 
@@ -158,33 +160,28 @@ class HuggingfaceEmbeddings(nn.Module):
 
 @registry.register_transformer_backend("huggingface")
 class HuggingfaceBackend(BaseTransformerBackend):
-    """Transformer backend wih Huggingface transformer models"""
+    """Transformer backend wih Huggingface transformer models
+    """
 
-    def __init__(self, config: BaseTransformer.Config, *args, **kwargs):
+    def __init__(self, config: BaseTransformerConfigType, *args, **kwargs):
         super().__init__(config)
 
         # Replace transformer layers with scriptable JIT layers
         replace_with_jit()
 
     def build_transformer_config(self):
-        """Build the transformer base model config."""
+        """Build the transformer base model config.
+        """
         self.transformer_config = AutoConfig.from_pretrained(
             self.config.transformer_base, **OmegaConf.to_container(self.config)
         )
 
     def build_transformer_base(self):
-        """Build the transformer base model."""
-        hf_params = {"config": self.transformer_config}
-
-        # For BERT models, initialize using Jit version
-        if self.config.transformer_base.startswith("bert-"):
-            self.transformer = BertModelJit.from_pretrained(
-                self.config.transformer_base, **hf_params
-            )
-        else:
-            self.transformer = AutoModel.from_pretrained(
-                self.config.transformer_base, **hf_params
-            )
+        """Build the transformer base model.
+        """
+        self.transformer = AutoModel.from_pretrained(
+            self.config.transformer_base, config=self.transformer_config
+        )
 
     def build_embeddings(self):
         """Build the multimodal embeddings using the transformer base
@@ -195,7 +192,8 @@ class HuggingfaceBackend(BaseTransformerBackend):
         )
 
     def get_config(self):
-        """Return the transformer configuration."""
+        """Return the transformer configuration.
+        """
         return self.transformer_config
 
     def generate_embeddings(
@@ -205,13 +203,15 @@ class HuggingfaceBackend(BaseTransformerBackend):
         segment_ids: Dict[str, Tensor],
         attention_mask: Tensor,
     ) -> Tensor:
-        """Generate multimodal embeddings."""
+        """Generate multimodal embeddings.
+        """
         return self.embeddings(
             tokens_ids=tokens_ids, position_ids=position_ids, segment_ids=segment_ids
         )
 
     def generate_attention_mask(self, masks: List[Tensor]) -> Tensor:
-        """Generate attention mask."""
+        """Generate attention mask.
+        """
         attention_mask = torch.cat(masks, dim=-1)
         extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
         extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0

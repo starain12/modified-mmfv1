@@ -6,17 +6,14 @@ import logging
 import os
 import sys
 import warnings
-from typing import Any, Dict
 
 import torch
 from mmf.common.registry import registry
-from mmf.utils.checkpoint_updater import get_pretrained_state_mapping_checkpoint
 from mmf.utils.configuration import get_mmf_env, load_yaml
-from mmf.utils.distributed import is_main, is_xla, open_if_main, synchronize
+from mmf.utils.distributed import is_master, synchronize
 from mmf.utils.download import download_pretrained_model
 from mmf.utils.file_io import PathManager
 from mmf.utils.general import get_current_device, updir
-from mmf.utils.xla import save_xla_ckpt
 from omegaconf import OmegaConf
 
 
@@ -25,13 +22,7 @@ try:
 except ImportError:
     git = None
 
-try:
-    import torch_xla.core.xla_model as xm
-except ImportError:
-    xm = None
-
 logger = logging.getLogger(__name__)
-ALLOWED_CHECKPOINT_EXTS = [".ckpt", ".pth", ".pt"]
 
 
 def _hack_imports():
@@ -43,86 +34,8 @@ def _hack_imports():
     )
 
 
-def get_ckpt_path_from_folder(folder) -> str:
-    ckpts = []
-    allowed_ckpt_types = [f"*{ext}" for ext in ALLOWED_CHECKPOINT_EXTS]
-    for ckpt_type in allowed_ckpt_types:
-        ckpts.extend(glob.glob(os.path.join(folder, ckpt_type)))
-
-    assert (
-        len(ckpts) == 1
-    ), "None or multiple checkpoints files. MMF doesn't know what to do."
-
-    return ckpts[0]
-
-
-def get_ckpt_from_path(path) -> Dict[str, Any]:
-    with PathManager.open(path, "rb") as f:
-        ckpt = torch.load(f, map_location=lambda storage, loc: storage)
-        return ckpt
-
-
-def get_config_from_folder_or_ckpt(
-    folder: str, ckpt: Dict[str, Any] = None
-) -> Dict[str, Any]:
-    r"""gets config from folder or checkpoint
-
-    Args:
-        folder (str): folder from which config will be searched first
-        ckpt (Optional[Dict[str, Any]]): optional checkpoint from which config
-            might be found.
-
-    Returns:
-        config (Dict[str, Any]): config object
-    """
-    configs = glob.glob(os.path.join(folder, "*.yaml"))
-
-    if len(configs) > 0:
-        assert len(configs) <= 1, (
-            "Multiple yaml files with the pretrained model. "
-            + "MMF doesn't know what to do."
-        )
-        config_file = configs[0]
-        config = load_yaml(config_file)
-    else:
-        assert "config" in ckpt, (
-            "No configs provided with pretrained model"
-            " while checkpoint also doesn't have configuration."
-        )
-        config = ckpt["config"]
-
-    return config
-
-
-def _load_pretrained_checkpoint(checkpoint_path, *args, **kwargs):
-    assert (
-        os.path.splitext(checkpoint_path)[1] in ALLOWED_CHECKPOINT_EXTS
-    ), f"Checkpoint must have extensions: {ALLOWED_CHECKPOINT_EXTS}"
-
-    _hack_imports()
-
-    with PathManager.open(checkpoint_path, "rb") as f:
-        ckpt = torch.load(f, map_location=lambda storage, loc: storage)
-    assert "config" in ckpt, (
-        "No configs provided with pretrained model "
-        " while checkpoint also doesn't have configuration."
-    )
-    config = ckpt.pop("config", None)
-    model_config = config.get("model_config", config)
-
-    ckpt = ckpt.get("model", ckpt)
-
-    if "model_name" in kwargs:
-        model_name = kwargs["model_name"]
-    else:
-        assert len(model_config.keys()) == 1, "Only one model type should be specified."
-        model_name = list(model_config.keys())[0]
-
-    model_config = model_config.get(model_name)
-    return {"config": model_config, "checkpoint": ckpt, "full_config": config}
-
-
-def _load_pretrained_model(model_name_or_path, *args, **kwargs):
+def load_pretrained_model(model_name_or_path, *args, **kwargs):
+    # If this is a file, then load this directly else download and load
     if PathManager.exists(model_name_or_path):
         download_path = model_name_or_path
         model_name = model_name_or_path
@@ -130,36 +43,41 @@ def _load_pretrained_model(model_name_or_path, *args, **kwargs):
         download_path = download_pretrained_model(model_name_or_path, *args, **kwargs)
         model_name = model_name_or_path
 
+    configs = glob.glob(os.path.join(download_path, "*.yaml"))
+    assert len(configs) <= 1, (
+        "Multiple yaml files with the pretrained model. "
+        + "MMF doesn't know what to do."
+    )
+
+    ckpts = []
+    allowed_ckpt_types = ("*.ckpt", "*.pth", "*.pt")
+    for ckpt_type in allowed_ckpt_types:
+        ckpts.extend(glob.glob(os.path.join(download_path, ckpt_type)))
+
+    assert (
+        len(ckpts) == 1
+    ), "None or multiple checkpoints files. MMF doesn't know what to do."
+
     _hack_imports()
 
-    ckpt_path = get_ckpt_path_from_folder(download_path)
-    ckpt = get_ckpt_from_path(ckpt_path)
-
+    with PathManager.open(ckpts[0], "rb") as f:
+        ckpt = torch.load(f, map_location=lambda storage, loc: storage)
     # If configs are not present, will ckpt provide the config?
-    config = get_config_from_folder_or_ckpt(download_path, ckpt)
+    if len(configs) == 0:
+        assert "config" in ckpt, (
+            "No configs provided with pretrained model "
+            " while checkpoint also doesn't have configuration."
+        )
+        config = ckpt["config"]
+    else:
+        config = load_yaml(configs[0])
+
     model_config = config.get("model_config", config)
     ckpt = ckpt.get("model", ckpt)
-
     # Also handle the case of model_name is path
-    if PathManager.exists(model_name):
-        # This shouldn't happen
-        assert len(model_config.keys()) == 1, "Checkpoint contains more than one model?"
-        # Take first key
-        model_config = model_config[list(model_config.keys())[0]]
-    else:
-        model_config = model_config.get(model_name.split(os.path.sep)[-1].split(".")[0])
+    model_config = model_config.get(model_name.split(os.path.sep)[-1].split(".")[0])
 
     return {"config": model_config, "checkpoint": ckpt, "full_config": config}
-
-
-def load_pretrained_model(model_name_or_path_or_checkpoint, *args, **kwargs):
-    # If this is a file, then load this directly else download and load
-    if PathManager.isfile(model_name_or_path_or_checkpoint):
-        return _load_pretrained_checkpoint(
-            model_name_or_path_or_checkpoint, args, kwargs
-        )
-    else:
-        return _load_pretrained_model(model_name_or_path_or_checkpoint, args, kwargs)
 
 
 def consolidate_optim_state_dict(optimizer):
@@ -208,12 +126,9 @@ class Checkpoint:
         self.saved_iterations = []
 
     def save_config(self):
-        if not is_main():
-            return
-
         cfg_file = os.path.join(self.ckpt_foldername, "config.yaml")
         with PathManager.open(cfg_file, "w") as f:
-            f.write(OmegaConf.to_yaml(self.config, resolve=True))
+            f.write(self.config.pretty(resolve=True))
 
     def load_state_dict(self):
         ckpt_config = self.config.checkpoint
@@ -279,6 +194,7 @@ class Checkpoint:
             pretrained_state_mapping = {}
 
         state_dict = self.upgrade_state_dict(ckpt["model"])
+
         if len(pretrained_state_mapping.items()) == 0:
             incompatible_keys = self.trainer.model.load_state_dict(
                 state_dict, strict=False
@@ -373,14 +289,8 @@ class Checkpoint:
 
             self.trainer.num_updates = self.trainer.current_iteration
 
-        lr_scheduler = self.trainer.lr_scheduler_callback
-
-        if (
-            lr_scheduler is not None
-            and getattr(lr_scheduler, "_scheduler", None) is not None
-        ):
-            lr_scheduler = lr_scheduler._scheduler
-
+        lr_scheduler = self.trainer.lr_scheduler_callback._scheduler
+        if lr_scheduler is not None:
             if "lr_scheduler" in ckpt:
                 lr_scheduler.load_state_dict(ckpt["lr_scheduler"])
             else:
@@ -406,12 +316,24 @@ class Checkpoint:
     def _load_pretrained(self, ckpt):
         model = self.trainer.model
         own_state = model.state_dict()
-        ckpt_update_dict = get_pretrained_state_mapping_checkpoint(
-            checkpoint=ckpt, model=model, config=self.trainer.config
-        )
-        for own_attr, attr in ckpt_update_dict.items():
-            logger.info("Copying " + own_attr + " from " + attr)
-            own_state[own_attr].copy_(ckpt[attr])
+        mapping = self.trainer.config.checkpoint.pretrained_state_mapping
+        for key, value in mapping.items():
+            key += "."
+            value += "."
+            for attr in ckpt:
+                for own_attr in own_state:
+                    if hasattr(model, "format_state_key"):
+                        formatted_attr = model.format_state_key(attr)
+                    else:
+                        formatted_attr = attr
+                    if (
+                        key in own_attr
+                        and value in formatted_attr
+                        and own_attr.replace(key, "")
+                        == formatted_attr.replace(value, "")
+                    ):
+                        logger.info("Copying " + own_attr + " from " + attr)
+                        own_state[own_attr].copy_(ckpt[attr])
         logger.info("Pretrained model loaded")
 
     def upgrade_state_dict(self, state_dict):
@@ -459,9 +381,7 @@ class Checkpoint:
         # Backwards compatibility to Pythia
         _hack_imports()
 
-        # Force get_local_path to always redownload checkpoints
-        local_path = PathManager.get_local_path(file, force=True)
-        with PathManager.open(local_path, "rb") as f:
+        with PathManager.open(file, "rb") as f:
             if "cuda" in str(self.device):
                 return torch.load(f, map_location=self.device)
             else:
@@ -470,15 +390,15 @@ class Checkpoint:
     def _get_vcs_fields(self):
         """Returns a dict with git fields of the current repository
 
-        To reproduce an experiment directly from a checkpoint
+           To reproduce an experiment directly from a checkpoint
 
-        1) Export `config` key as a yaml
-        2) Clone repository and checkout at given commit on given branch
-        3) Any local change (diff) while running the experiment is stored
-           in the value with key `git/diff`, output the diff to a `path.diff`
-           file and apply the patch to the current state by simply
+           1) Export `config` key as a yaml
+           2) Clone repository and checkout at given commit on given branch
+           3) Any local change (diff) while running the experiment is stored
+              in the value with key `git/diff`, output the diff to a `path.diff`
+              file and apply the patch to the current state by simply
 
-                        `patch -p0 < path.diff`
+                           `patch -p0 < path.diff`
         """
 
         return {
@@ -489,19 +409,11 @@ class Checkpoint:
             "git/diff": self.git_repo.git.diff("--no-prefix"),
         }
 
-    def save_func(self, *args):
-        return save_xla_ckpt(*args) if is_xla() else torch.save(*args)
-
     def save(self, update, iteration=None, update_best=False):
         # Only save in main process
-        # For xla we use xm.save method
-        # Which ensures that actual checkpoint saving happens
-        # only for the master node.
-        # The method also takes care of all the necessary synchronization
-        if not is_main() and not is_xla():
+        if not is_master():
             return
 
-        logger.info("Checkpoint save operation started!")
         if not iteration:
             iteration = update
 
@@ -522,7 +434,6 @@ class Checkpoint:
         best_metric = (
             self.trainer.early_stop_callback.early_stopping.best_monitored_value
         )
-
         model = self.trainer.model
         data_parallel = registry.get("data_parallel") or registry.get("distributed")
         fp16_scaler = getattr(self.trainer, "scaler", None)
@@ -548,50 +459,30 @@ class Checkpoint:
             "config": OmegaConf.to_container(self.config, resolve=True),
         }
 
-        lr_scheduler = self.trainer.lr_scheduler_callback
-
-        if (
-            lr_scheduler is not None
-            and getattr(lr_scheduler, "_scheduler", None) is not None
-        ):
-            lr_scheduler = lr_scheduler._scheduler
+        lr_scheduler = self.trainer.lr_scheduler_callback._scheduler
+        if lr_scheduler is not None:
             ckpt["lr_scheduler"] = lr_scheduler.state_dict()
 
         if self.git_repo:
             git_metadata_dict = self._get_vcs_fields()
             ckpt.update(git_metadata_dict)
 
-        with open_if_main(ckpt_filepath, "wb") as f:
-            self.save_func(ckpt, f)
+        with PathManager.open(ckpt_filepath, "wb") as f:
+            torch.save(ckpt, f)
 
         if update_best:
-            logger.info("Saving best checkpoint")
-            with open_if_main(best_ckpt_filepath, "wb") as f:
-                self.save_func(ckpt, f)
+            with PathManager.open(best_ckpt_filepath, "wb") as f:
+                torch.save(ckpt, f)
 
         # Save current always
-
-        logger.info("Saving current checkpoint")
-        with open_if_main(current_ckpt_filepath, "wb") as f:
-            self.save_func(ckpt, f)
-
-        # Save the current checkpoint as W&B artifacts for model versioning.
-        if self.config.training.wandb.log_checkpoint:
-            logger.info(
-                "Saving current checkpoint as W&B Artifacts for model versioning"
-            )
-            self.trainer.logistics_callback.wandb_logger.log_model_checkpoint(
-                current_ckpt_filepath
-            )
+        with PathManager.open(current_ckpt_filepath, "wb") as f:
+            torch.save(ckpt, f)
 
         # Remove old checkpoints if max_to_keep is set
-        # In XLA, only delete checkpoint files in main process
-        if self.max_to_keep > 0 and is_main():
+        if self.max_to_keep > 0:
             if len(self.saved_iterations) == self.max_to_keep:
                 self.remove(self.saved_iterations.pop(0))
             self.saved_iterations.append(update)
-
-        logger.info("Checkpoint save operation finished!")
 
     def remove(self, update):
         ckpt_filepath = os.path.join(self.models_foldername, "model_%d.ckpt" % update)
@@ -607,6 +498,6 @@ class Checkpoint:
             self._load(best_path, force=True)
 
     def finalize(self):
-        if is_main() or is_xla():
-            with open_if_main(self.pth_filepath, "wb") as f:
-                self.save_func(self.trainer.model.state_dict(), f)
+        if is_master():
+            with PathManager.open(self.pth_filepath, "wb") as f:
+                torch.save(self.trainer.model.state_dict(), f)

@@ -28,8 +28,8 @@ from mmf.modules.hf_layers import replace_with_jit
 from mmf.utils.checkpoint import load_pretrained_model
 from mmf.utils.configuration import get_mmf_cache_dir
 from mmf.utils.modeling import get_optimizer_parameters_for_bert
-from omegaconf import DictConfig, II, OmegaConf
-from torch import nn, Tensor
+from omegaconf import II, DictConfig, OmegaConf
+from torch import Tensor, nn
 from transformers.modeling_bert import BertForPreTraining, BertPredictionHeadTransform
 
 
@@ -55,9 +55,7 @@ class MMBTConfig:
 
 # TODO: Remove after transformers package upgrade to 2.5
 class ModalEmbeddings(nn.Module):
-    """
-    Generic Modal Embeddings which takes in an encoder,
-    and a transformer embedding.
+    """Generic Modal Embeddings which takes in an encoder, and a transformer embedding.
     """
 
     def __init__(self, config, encoder, embeddings):
@@ -122,39 +120,39 @@ class ModalEmbeddings(nn.Module):
 # TODO: Remove after transformers package upgrade to 2.5
 class MMBTModel(nn.Module):
     r"""
-    Outputs: `Tuple` comprising various elements depending on the configuration
-        (config) and inputs:
-        **last_hidden_state**: ``torch.FloatTensor`` of shape
-            ``(batch_size, sequence_length, hidden_size)``. Sequence of
-            hidden-states at the output of the last layer of the model.
-        **pooler_output**: ``torch.FloatTensor`` of shape
-            ``(batch_size, hidden_size)``. Last layer hidden-state of the
-            first token of the sequence (classification token) further processed
-            by a Linear layer and a Tanh activation function. The Linear
-            layer weights are trained from the next sentence prediction
-            (classification) objective during Bert pretraining. This output
-            is usually *not* a good summary of the semantic content of the
-            input, you're often better with averaging or pooling
-            the sequence of hidden-states for the whole input sequence.
-        **hidden_states**: (`optional`, returned when
-            ``config.output_hidden_states=True``)
-            list of ``torch.FloatTensor`` (one for the output of each layer +
-            the output of the embeddings)
-            of shape ``(batch_size, sequence_length, hidden_size)``:
-            Hidden-states of the model at the output of each layer plus the
-            initial embedding outputs.
-        **attentions**: (`optional`, returned when
-            ``config.output_attentions=True``) list of ``torch.FloatTensor``
-            (one for each layer) of shape ``(batch_size, num_heads,
-            sequence_length, sequence_length)``: Attentions weights after
-            the attention softmax, used to compute the weighted average in the
-            self-attention heads.
-    Examples::
-        # For example purposes. Not runnable.
-        transformer = BertModel.from_pretrained('bert-base-uncased')
-        encoder = ImageEncoder(args)
-        mmbt = MMBTModel(config, transformer, encoder)
-    """
+        Outputs: `Tuple` comprising various elements depending on the configuration
+            (config) and inputs:
+            **last_hidden_state**: ``torch.FloatTensor`` of shape
+                ``(batch_size, sequence_length, hidden_size)``. Sequence of
+                hidden-states at the output of the last layer of the model.
+            **pooler_output**: ``torch.FloatTensor`` of shape
+                ``(batch_size, hidden_size)``. Last layer hidden-state of the
+                first token of the sequence (classification token) further processed
+                by a Linear layer and a Tanh activation function. The Linear
+                layer weights are trained from the next sentence prediction
+                (classification) objective during Bert pretraining. This output
+                is usually *not* a good summary of the semantic content of the
+                input, you're often better with averaging or pooling
+                the sequence of hidden-states for the whole input sequence.
+            **hidden_states**: (`optional`, returned when
+                ``config.output_hidden_states=True``)
+                list of ``torch.FloatTensor`` (one for the output of each layer +
+                the output of the embeddings)
+                of shape ``(batch_size, sequence_length, hidden_size)``:
+                Hidden-states of the model at the output of each layer plus the
+                initial embedding outputs.
+            **attentions**: (`optional`, returned when
+                ``config.output_attentions=True``) list of ``torch.FloatTensor``
+                (one for each layer) of shape ``(batch_size, num_heads,
+                sequence_length, sequence_length)``: Attentions weights after
+                the attention softmax, used to compute the weighted average in the
+                self-attention heads.
+        Examples::
+            # For example purposes. Not runnable.
+            transformer = BertModel.from_pretrained('bert-base-uncased')
+            encoder = ImageEncoder(args)
+            mmbt = MMBTModel(config, transformer, encoder)
+        """
 
     def __init__(self, config, transformer, encoder):
         super().__init__()
@@ -456,9 +454,9 @@ class MMBTForPreTraining(nn.Module):
         self.tie_weights()
 
     def tie_weights(self):
-        """Make sure we are sharing the input and output embeddings.
-        Export to TorchScript can't handle parameter sharing so we
-        are cloning them instead.
+        """ Make sure we are sharing the input and output embeddings.
+            Export to TorchScript can't handle parameter sharing so we
+            are cloning them instead.
         """
         if hasattr(self, "cls"):
             self.bert.mmbt.transformer._tie_or_clone_weights(
@@ -521,7 +519,7 @@ class MMBTForClassification(nn.Module):
         self.num_labels = self.config.num_labels
         self.output_hidden_states = self.encoder_config.output_hidden_states
         self.output_attentions = self.encoder_config.output_attentions
-        self.fused_feature_only = self.config.get("fused_feature_only", False)
+        self.fused_feature_only = self.config.fused_feature_only
 
         self.dropout = nn.Dropout(self.encoder_config.hidden_dropout_prob)
         self.classifier = nn.Sequential(
@@ -616,9 +614,8 @@ class MMBT(BaseModel):
         model = super().from_pretrained(model_name, *args, **kwargs)
         config = load_pretrained_model(model_name)["full_config"]
         OmegaConf.set_struct(config, True)
-        if model_name == "mmbt.hateful_memes.images" or kwargs.get("interface"):
+        if model_name == "mmbt.hateful_memes.images":
             return MMBTGridHMInterface(model, config)
-        return model
 
     @classmethod
     def config_path(cls):
